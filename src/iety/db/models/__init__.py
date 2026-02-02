@@ -1,0 +1,1 @@
+"""SQLModel definitions for IETY."""
