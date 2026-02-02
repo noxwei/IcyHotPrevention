@@ -122,13 +122,18 @@ class TextChunker:
                 content_hash=self._compute_hash(chunk_text),
             )
 
+            # Check if we've reached the end
+            if token_end >= total_tokens:
+                break
+
             # Move to next chunk with overlap
-            token_start = token_end - self.overlap_tokens
+            new_start = token_end - self.overlap_tokens
             chunk_index += 1
 
-            # Prevent infinite loop if overlap >= max_tokens
-            if token_start >= token_end:
+            # Prevent infinite loop - ensure we always advance
+            if new_start <= token_start:
                 break
+            token_start = new_start
 
     def chunk_with_metadata(
         self,
@@ -249,7 +254,9 @@ class SentenceChunker:
                     current_tokens = sum(self.count_tokens(s) for s in current_sentences)
 
                 # Use basic chunker for long sentence
-                basic_chunker = TextChunker(self.max_tokens, 50)
+                # Overlap should be at most 10% of max_tokens to ensure progress
+                overlap = min(50, max(1, self.max_tokens // 10))
+                basic_chunker = TextChunker(self.max_tokens, overlap)
                 for sub_chunk in basic_chunker.chunk_text(sentence):
                     yield TextChunk(
                         text=sub_chunk.text,
