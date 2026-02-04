@@ -1,9 +1,26 @@
 """SEC EDGAR companyfacts ingestion pipeline."""
 
 import hashlib
-from datetime import datetime
+from datetime import datetime, date
 from typing import Any, Optional
 import logging
+
+
+def parse_date(date_str: Optional[str]) -> Optional[date]:
+    """Parse date string to date object.
+
+    Args:
+        date_str: Date string in YYYY-MM-DD format
+
+    Returns:
+        date object or None if invalid
+    """
+    if not date_str:
+        return None
+    try:
+        return datetime.strptime(date_str, "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        return None
 
 import httpx
 from sqlalchemy import text
@@ -57,18 +74,16 @@ class SECCompanyFactsPipeline(BasePipeline[dict, str]):
         super().__init__(session, batch_size)
         self.settings = get_settings().sec
 
-        # Default CIKs for major government contractors
+        # Default CIKs for immigration enforcement contractors
         self.cik_list = cik_list or [
-            "0001047469",  # GEO Group
-            "0001091667",  # CoreCivic
-            "0001058290",  # Palantir
-            "0001288776",  # General Dynamics
-            "0000040533",  # Lockheed Martin
-            "0000078003",  # Raytheon
-            "0000818479",  # L3Harris
-            "0000096223",  # Northrop Grumman
-            "0000104169",  # SAIC
-            "0001373715",  # Leidos
+            "0000923796",  # GEO Group (private prisons)
+            "0001070985",  # CoreCivic (private prisons)
+            "0001321655",  # Palantir (ICE data systems)
+            "0000040533",  # General Dynamics (IT services)
+            "0001336920",  # Leidos (border technology)
+            "0000072945",  # Northrop Grumman (surveillance)
+            "0000202058",  # L3Harris (detection systems)
+            "0000082267",  # Raytheon (border security tech)
         ]
 
         self.client = httpx.AsyncClient(
@@ -190,9 +205,9 @@ class SECCompanyFactsPipeline(BasePipeline[dict, str]):
                             "description": description,
                             "unit": unit,
                             "value": val.get("val"),
-                            "start_date": val.get("start"),
-                            "end_date": val.get("end"),
-                            "filed": val.get("filed"),
+                            "start_date": parse_date(val.get("start")),
+                            "end_date": parse_date(val.get("end")),
+                            "filed": parse_date(val.get("filed")),
                             "form": val.get("form"),
                             "accession_number": val.get("accn"),
                             "fiscal_year": val.get("fy"),
@@ -243,7 +258,7 @@ class SECCompanyFactsPipeline(BasePipeline[dict, str]):
                 :start_date, :end_date, :filed, :form, :accession_number,
                 :fiscal_year, :fiscal_period, :cik_hash
             )
-            ON CONFLICT (cik, taxonomy, tag, end_date, form, accession_number)
+            ON CONFLICT (cik, taxonomy, tag, end_date, form, accession_number, cik_hash)
             DO UPDATE SET
                 value = EXCLUDED.value,
                 label = EXCLUDED.label

@@ -39,7 +39,7 @@ def upgrade() -> None:
     # Create companyfacts table - partitioned by CIK hash
     op.execute("""
         CREATE TABLE sec.companyfacts (
-            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            id UUID DEFAULT gen_random_uuid(),
             cik TEXT NOT NULL,
             taxonomy TEXT NOT NULL,
             tag TEXT NOT NULL,
@@ -57,7 +57,8 @@ def upgrade() -> None:
             cik_hash INTEGER NOT NULL,
             raw_data JSONB,
             created_at TIMESTAMPTZ DEFAULT NOW(),
-            UNIQUE(cik, taxonomy, tag, end_date, form, accession_number)
+            PRIMARY KEY (id, cik_hash),
+            UNIQUE(cik, taxonomy, tag, end_date, form, accession_number, cik_hash)
         ) PARTITION BY HASH (cik_hash)
     """)
 

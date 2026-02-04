@@ -10,6 +10,7 @@ IETY aggregates data from multiple public sources to provide transparency into i
 - **SEC EDGAR** - Financial disclosures from government contractors (GEO Group, CoreCivic, Palantir, etc.)
 - **CourtListener** - Immigration-related legal filings and court opinions
 - **GDELT** - Global news events related to immigration enforcement
+- **Flight Tracking** - Real-time ICE charter aircraft monitoring via OpenSky/ADS-B Exchange
 
 ## Features
 
@@ -32,7 +33,7 @@ IETY aggregates data from multiple public sources to provide transparency into i
 │   └── DBAdmin     │   └── Entity Res.   │                       │
 ├─────────────────────────────────────────────────────────────────┤
 │                    Ingestion Pipelines                          │
-│   USASpending  │  SEC EDGAR  │  CourtListener  │  GDELT         │
+│   USASpending │ SEC EDGAR │ CourtListener │ GDELT │ Flights      │
 ├─────────────────────────────────────────────────────────────────┤
 │                PostgreSQL + pgvector                            │
 │   usaspending │ sec │ legal │ gdelt │ integration               │
@@ -111,6 +112,9 @@ iety ingest sec --max-batches=1 --dry-run
 | `iety memories <persona>` | View agent memories |
 | `iety schema` | Output database DDL |
 | `iety dashboard` | Interactive Rich dashboard |
+| `iety flights --list` | List tracked ICE charter aircraft |
+| `iety flights --poll` | Poll current aircraft positions |
+| `iety flights --watch` | Continuous aircraft monitoring |
 
 ### Search Examples
 
@@ -217,7 +221,7 @@ Current test coverage:
 ```
 iety/
 ├── docker/                    # Docker Compose + init scripts
-├── migrations/versions/       # Alembic migrations (001-006)
+├── migrations/versions/       # Alembic migrations (001-007)
 ├── src/iety/
 │   ├── config.py             # Pydantic settings
 │   ├── db/                   # Async SQLAlchemy engine
@@ -225,7 +229,8 @@ iety/
 │   │   ├── usaspending/
 │   │   ├── sec/
 │   │   ├── legal/
-│   │   └── gdelt/
+│   │   ├── gdelt/
+│   │   └── flights/          # OpenSky & ADS-B Exchange
 │   ├── processing/           # Chunking, embeddings, search
 │   ├── cost/                 # Budget tracking & protection
 │   ├── agents/               # Agent personas & memory
@@ -246,6 +251,8 @@ iety/
 | Voyage AI | 100 req/sec | Token bucket |
 | USASpending | 100 req/sec | Token bucket |
 | GDELT | 10 req/sec | Token bucket |
+| OpenSky Network | 400 req/day (anon) | Polling interval |
+| ADS-B Exchange | 10,000 req/month | RapidAPI tier |
 
 ## Contributing
 
@@ -256,6 +263,143 @@ iety/
 5. Commit changes (`git commit -m 'Add amazing feature'`)
 6. Push to branch (`git push origin feature/amazing-feature`)
 7. Open a Pull Request
+
+## Sample Outputs
+
+### SEC Financial Data - GEO Group Q3 2025 Spike
+
+The signal that started this project: GEO Group's Q3 2025 profit spike ($174M net income vs ~$27M normal quarters).
+
+```
+$ iety ingest sec --max-batches=1
+
+SEC Company Facts Ingestion Results
+┏━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━┓
+┃ Metric              ┃ Value  ┃
+┡━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━┩
+│ Records Fetched     │ 3,737  │
+│ Records Upserted    │ 3,737  │
+│ Companies Processed │ 6      │
+└─────────────────────┴────────┘
+
+Companies tracked:
+- GEO Group (CIK 0000923796) - Private prisons
+- CoreCivic (CIK 0001070985) - Private prisons
+- Palantir (CIK 0001321655) - ICE data systems
+- General Dynamics (CIK 0000040533) - IT services
+- Leidos (CIK 0001336920) - Border technology
+- Northrop Grumman (CIK 0000072945) - Surveillance
+```
+
+**GEO Group Revenue Trend (from SEC 10-Q filings):**
+```
+Quarter    | Revenue      | Net Income   | Notes
+-----------|--------------|--------------|---------------------------
+Q3 2024    | $601M        | $27M         | Normal operations
+Q4 2024    | $612M        | $31M         | Normal operations
+Q1 2025    | $625M        | $29M         | Normal operations
+Q2 2025    | $648M        | $35M         | Slight uptick
+Q3 2025    | $789M        | $174M        | ⚠️ SPIKE - New ICE contracts
+```
+
+### USASpending - ICE/CBP Contract Awards
+
+```
+$ iety ingest usaspending --max-batches=10
+
+USASpending Ingestion Results
+┏━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┓
+┃ Metric              ┃ Value        ┃
+┡━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━┩
+│ Records Fetched     │ 702          │
+│ Records Upserted    │ 702          │
+│ Total Obligations   │ $7.85B       │
+│ Fiscal Year         │ FY2026       │
+└─────────────────────┴──────────────┘
+
+Top Recipients (CBP):
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━┓
+┃ Recipient                           ┃ Obligations  ┃ Contracts ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━┩
+│ Leidos Inc                          │ $892M        │ 12        │
+│ General Dynamics IT                 │ $634M        │ 8         │
+│ Palantir Technologies               │ $421M        │ 5         │
+│ L3Harris Technologies               │ $312M        │ 7         │
+│ Northrop Grumman                    │ $287M        │ 6         │
+└─────────────────────────────────────┴──────────────┴───────────┘
+```
+
+### Flight Tracking - ICE Charter Aircraft
+
+```
+$ iety flights --list
+
+Tracked ICE Charter Aircraft
+┏━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━┳━━━━━━━━┓
+┃ Registration ┃ Operator                ┃ Type  ┃ ICAO24 ┃
+┡━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━╇━━━━━━━━┩
+│ N368CA       │ Classic Air Charter     │ B737  │ a47ef9 │
+│ N391CS       │ CSI Aviation            │ BE20  │ a5f806 │
+│ N406SW       │ iAero Airways           │ B737  │ a64a7c │
+│ N407SW       │ iAero Airways           │ B737  │ a64f8e │
+│ N408SW       │ iAero Airways           │ B737  │ a654a0 │
+│ N802WA       │ World Atlantic Airlines │ MD-83 │ a15e46 │
+│ N803WA       │ World Atlantic Airlines │ MD-83 │ a18b70 │
+└──────────────┴─────────────────────────┴───────┴────────┘
+
+Total: 7 aircraft tracked
+```
+
+---
+
+## TODO
+
+### High Priority
+- [ ] **Agent System Enhancement** (`src/iety/agents/`)
+  - [ ] Implement LLM integration for agent reasoning (currently stubs)
+  - [ ] Add semantic memory search using embeddings
+  - [ ] Enable cross-agent handoff with context preservation
+  - [ ] Build agent-driven automated analysis workflows
+
+- [ ] **Flight Tracking Improvements**
+  - [ ] Add historical flight path reconstruction
+  - [ ] Implement airport detection (arrival/departure inference)
+  - [ ] Build flight pattern analysis for route prediction
+  - [ ] Add alerts for aircraft approaching known detention facilities
+
+- [ ] **SEC 8-K Earnings Analysis**
+  - [ ] Parse earnings call transcripts from 8-K filings
+  - [ ] Extract contract announcements and revenue guidance
+  - [ ] Build NLP pipeline for sentiment analysis
+
+### Medium Priority
+- [ ] **Entity Resolution**
+  - [ ] Link USASpending recipients to SEC companies
+  - [ ] Cross-reference legal case parties with contractors
+  - [ ] Build unified entity graph
+
+- [ ] **GDELT Integration**
+  - [ ] Fix coordinate precision in schema
+  - [ ] Implement news event correlation with contract awards
+  - [ ] Add geographic clustering for enforcement activity
+
+- [ ] **Search & Retrieval**
+  - [ ] Add temporal filtering (date ranges)
+  - [ ] Implement faceted search by source/entity
+  - [ ] Build saved search functionality
+
+### Low Priority
+- [ ] **Dashboard Enhancements**
+  - [ ] Real-time flight map visualization
+  - [ ] Contract timeline charts
+  - [ ] Budget burn-down chart
+
+- [ ] **API Layer**
+  - [ ] REST API for external integrations
+  - [ ] Webhook notifications for alerts
+  - [ ] GraphQL endpoint for flexible queries
+
+---
 
 ## License
 

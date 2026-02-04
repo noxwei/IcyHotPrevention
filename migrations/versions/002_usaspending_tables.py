@@ -21,7 +21,7 @@ def upgrade() -> None:
     # Create awards table - partitioned by fiscal year
     op.execute("""
         CREATE TABLE usaspending.awards (
-            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            id UUID DEFAULT gen_random_uuid(),
             award_id TEXT NOT NULL,
             award_type TEXT,
             awarding_agency_name TEXT,
@@ -47,6 +47,7 @@ def upgrade() -> None:
             raw_data JSONB,
             created_at TIMESTAMPTZ DEFAULT NOW(),
             updated_at TIMESTAMPTZ DEFAULT NOW(),
+            PRIMARY KEY (id, fiscal_year),
             UNIQUE(award_id, fiscal_year)
         ) PARTITION BY RANGE (fiscal_year)
     """)

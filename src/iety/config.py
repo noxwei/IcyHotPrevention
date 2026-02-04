@@ -10,7 +10,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class DatabaseSettings(BaseSettings):
     """Database connection settings."""
 
-    model_config = SettingsConfigDict(env_prefix="POSTGRES_")
+    model_config = SettingsConfigDict(
+        env_prefix="POSTGRES_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
     host: str = Field(default="localhost", description="PostgreSQL host")
     port: int = Field(default=5432, description="PostgreSQL port")

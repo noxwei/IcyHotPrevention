@@ -163,3 +163,8 @@ docker/postgres/data/
 downloads/
 temp/
 scratch/
+
+# Credentials (extra protection)
+.env.txt
+*.key
+credentials.json

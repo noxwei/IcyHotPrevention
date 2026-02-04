@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Generic, Optional, TypeVar
+import json
 import logging
 
 from sqlalchemy import text
@@ -171,7 +172,7 @@ class BasePipeline(ABC, Generic[T, C]):
             sql,
             {
                 "name": self.pipeline_name,
-                "checkpoint": checkpoint_data,
+                "checkpoint": json.dumps(checkpoint_data),
                 "records": self._stats.records_upserted,
                 "status": status,
                 "error": error,

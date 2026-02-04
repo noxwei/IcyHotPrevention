@@ -1,6 +1,7 @@
 """IETY CLI - Command line interface for the IETY system."""
 
 import asyncio
+from datetime import datetime
 from typing import Optional
 
 import typer
@@ -118,6 +119,7 @@ async def _ingest(source: str, max_batches: Optional[int], dry_run: bool, reset:
         "sec": "iety.ingestion.sec.companyfacts:SECCompanyFactsPipeline",
         "legal": "iety.ingestion.legal.courtlistener:CourtListenerPipeline",
         "gdelt": "iety.ingestion.gdelt.poller:GDELTPoller",
+        "flights": "iety.ingestion.flights.opensky:OpenSkyPipeline",
     }
 
     if source not in pipelines:
@@ -370,6 +372,138 @@ async def _dashboard():
 
         dash = Dashboard(console)
         await dash.run_interactive(orchestrator)
+
+
+@app.command()
+def flights(
+    poll: bool = typer.Option(False, "--poll", "-p", help="Poll once for current positions"),
+    watch: bool = typer.Option(False, "--watch", "-w", help="Continuously watch (every 60s)"),
+    list_aircraft: bool = typer.Option(False, "--list", "-l", help="List tracked aircraft"),
+    source: str = typer.Option("auto", "--source", "-s", help="Data source: opensky, adsbx, or auto"),
+):
+    """Track ICE charter aircraft in real-time."""
+    run_async(_flights(poll, watch, list_aircraft, source))
+
+
+async def _flights(poll: bool, watch: bool, list_aircraft: bool, source: str):
+    """Async flights implementation."""
+    from iety.db.engine import get_session
+    from iety.ingestion.flights.opensky import OpenSkyPipeline
+    from iety.ingestion.flights.adsbexchange import ADSBExchangePipeline
+    from sqlalchemy import text
+    import os
+
+    async for session in get_session():
+        if list_aircraft:
+            # List tracked aircraft
+            sql = text("""
+                SELECT registration, operator, aircraft_type, icao24
+                FROM flights.aircraft
+                WHERE is_ice_charter = TRUE
+                ORDER BY operator, registration
+            """)
+            result = await session.execute(sql)
+            rows = result.fetchall()
+
+            table = Table(title="Tracked ICE Charter Aircraft")
+            table.add_column("Registration", style="cyan")
+            table.add_column("Operator", style="white")
+            table.add_column("Type", style="dim")
+            table.add_column("ICAO24", style="dim")
+
+            for row in rows:
+                table.add_row(row.registration, row.operator, row.aircraft_type, row.icao24)
+
+            console.print(table)
+            console.print(f"\n[dim]Total: {len(rows)} aircraft tracked[/dim]")
+            return
+
+        # Determine which source to use
+        adsbx_key = os.getenv("ADSBX_API_KEY")
+        opensky_user = os.getenv("OPENSKY_USERNAME")
+        opensky_pass = os.getenv("OPENSKY_PASSWORD")
+
+        pipeline = None
+        source_name = ""
+
+        if source == "adsbx" or (source == "auto" and adsbx_key):
+            if adsbx_key:
+                pipeline = ADSBExchangePipeline(session, adsbx_key)
+                source_name = "ADS-B Exchange"
+                console.print(f"[cyan]Using ADS-B Exchange API[/cyan]")
+            else:
+                console.print("[red]Error: ADSBX_API_KEY not set in .env[/red]")
+                console.print("[dim]Get a free key at: https://rapidapi.com/adsbx/api/adsbexchange-com1[/dim]")
+                return
+        else:
+            # Default to OpenSky
+            pipeline = OpenSkyPipeline(session, opensky_user, opensky_pass)
+            source_name = "OpenSky Network"
+            if not opensky_user or not opensky_pass:
+                console.print("[yellow]Note: No OpenSky credentials - using anonymous access (limited)[/yellow]")
+                console.print("[dim]Set OPENSKY_USERNAME and OPENSKY_PASSWORD in .env for better rate limits[/dim]\n")
+            else:
+                console.print(f"[cyan]Using OpenSky Network (authenticated)[/cyan]")
+
+        try:
+            if poll or (not watch):
+                # Single poll
+                console.print("[cyan]Polling ICE charter aircraft positions...[/cyan]")
+                result = await pipeline.poll_once()
+
+                table = Table(title="Current ICE Aircraft Positions")
+                table.add_column("ICAO24", style="cyan")
+                table.add_column("Callsign", style="white")
+                table.add_column("Position", style="green")
+                table.add_column("Altitude", style="yellow")
+                table.add_column("Speed", style="dim")
+                table.add_column("Status", style="bold")
+
+                for obs in result["observations"]:
+                    lat = obs.get("latitude")
+                    lon = obs.get("longitude")
+                    pos = f"{lat:.2f}, {lon:.2f}" if lat and lon else "Unknown"
+                    alt = f"{obs.get('altitude_m', 0):.0f}m" if obs.get("altitude_m") else "-"
+                    speed = f"{obs.get('velocity_ms', 0):.0f}m/s" if obs.get("velocity_ms") else "-"
+                    status = "[red]GROUND[/red]" if obs.get("on_ground") else "[green]AIRBORNE[/green]"
+
+                    table.add_row(
+                        obs["icao24"],
+                        obs.get("callsign", "-"),
+                        pos,
+                        alt,
+                        speed,
+                        status,
+                    )
+
+                if result["observations"]:
+                    console.print(table)
+                else:
+                    console.print("[yellow]No aircraft currently transmitting[/yellow]")
+
+                console.print(f"\n[dim]Tracked: {result['tracked']} | Airborne: {result['airborne']}[/dim]")
+
+            if watch:
+                # Continuous watching
+                import time
+                console.print("[cyan]Watching ICE charter flights (Ctrl+C to stop)...[/cyan]\n")
+
+                while True:
+                    result = await pipeline.poll_once()
+                    airborne = [o for o in result["observations"] if not o.get("on_ground")]
+
+                    if airborne:
+                        console.print(f"[green]{datetime.now().strftime('%H:%M:%S')}[/green] - {len(airborne)} aircraft airborne:")
+                        for obs in airborne:
+                            lat, lon = obs.get("latitude"), obs.get("longitude")
+                            console.print(f"  {obs['icao24']} ({obs.get('callsign', '?')}) @ {lat:.2f}, {lon:.2f}")
+                    else:
+                        console.print(f"[dim]{datetime.now().strftime('%H:%M:%S')}[/dim] - No aircraft airborne")
+
+                    time.sleep(60)  # Poll every 60 seconds
+
+        finally:
+            await pipeline.close()
 
 
 def main():

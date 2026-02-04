@@ -1,12 +1,23 @@
 """USASpending data ingestion pipeline."""
 
-from datetime import datetime
+from datetime import datetime, date
 from typing import Any, Optional
+import json
 import logging
 
 import httpx
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+
+
+def parse_date(date_str: Optional[str]) -> Optional[date]:
+    """Parse date string to date object."""
+    if not date_str:
+        return None
+    try:
+        return datetime.fromisoformat(date_str.replace("Z", "+00:00")).date()
+    except (ValueError, TypeError):
+        return None
 
 from iety.config import get_settings
 from iety.cost.rate_limiter import rate_limited
@@ -58,9 +69,15 @@ class USASpendingPipeline(BasePipeline[dict, str]):
         payload = {
             "page": page,
             "limit": self.batch_size,
-            "sort": "Award ID",
-            "order": "asc",
+            "sort": "Award Amount",
+            "order": "desc",
             "filters": filters or {},
+            "fields": [
+                "Award ID", "Recipient Name", "Award Amount", "Description",
+                "Start Date", "End Date", "Awarding Agency", "Awarding Sub Agency",
+                "Recipient UEI", "NAICS Code", "NAICS Description",
+                "PSC Code", "PSC Description"
+            ],
         }
 
         response = await self.client.post("/search/spending_by_award/", json=payload)
@@ -80,16 +97,17 @@ class USASpendingPipeline(BasePipeline[dict, str]):
         """
         page = checkpoint.page + 1
 
-        # Filter for ICE/CBP treasury accounts
+        # Filter for ICE and CBP contracts (2018+ to match partitions)
         filters = {
-            "tas_codes": [
-                {"aid": "070", "main": "0540"},  # ICE Operations
-                {"aid": "070", "main": "0543"},  # ICE Procurement
-                {"aid": "070", "main": "0532"},  # CBP Operations
+            "agencies": [
+                {"type": "awarding", "tier": "subtier", "name": "U.S. Immigration and Customs Enforcement"},
+                {"type": "awarding", "tier": "subtier", "name": "U.S. Customs and Border Protection"},
+            ],
+            "time_period": [
+                {"start_date": "2018-01-01", "end_date": "2027-12-31"}
             ],
             "award_type_codes": [
                 "A", "B", "C", "D",  # Contracts
-                "IDV_A", "IDV_B", "IDV_C", "IDV_D", "IDV_E",  # IDVs
             ],
         }
 
@@ -130,46 +148,43 @@ class USASpendingPipeline(BasePipeline[dict, str]):
         """
         try:
             # Extract fiscal year from dates
-            start_date = record.get("Start Date")
-            fiscal_year = None
+            start_date_str = record.get("Start Date")
+            start_date = parse_date(start_date_str)
+            end_date = parse_date(record.get("End Date"))
+
+            fiscal_year = datetime.now().year
             if start_date:
-                dt = datetime.fromisoformat(start_date.replace("Z", "+00:00"))
                 # Fiscal year: Oct-Dec = next year, Jan-Sep = current year
-                fiscal_year = dt.year if dt.month >= 10 else dt.year
+                fiscal_year = start_date.year + 1 if start_date.month >= 10 else start_date.year
+
+            # Skip records outside partition range (2018-2026)
+            if fiscal_year < 2018 or fiscal_year > 2026:
+                logger.debug(f"Skipping {record.get('Award ID')} - FY {fiscal_year} outside partition range")
+                return None
 
             return {
                 "award_id": record.get("Award ID"),
                 "award_type": record.get("Award Type"),
                 "awarding_agency_name": record.get("Awarding Agency"),
-                "awarding_agency_code": record.get("Awarding Agency Code"),
-                "funding_agency_name": record.get("Funding Agency"),
-                "funding_agency_code": record.get("Funding Agency Code"),
+                "awarding_agency_code": record.get("Awarding Sub Agency"),
+                "funding_agency_name": record.get("Awarding Agency"),
+                "funding_agency_code": None,
                 "recipient_name": record.get("Recipient Name"),
                 "recipient_uei": record.get("Recipient UEI"),
-                "recipient_duns": record.get("Recipient DUNS"),
-                "recipient_location": {
-                    "city": record.get("Recipient City"),
-                    "state": record.get("Recipient State"),
-                    "country": record.get("Recipient Country"),
-                    "zip": record.get("Recipient Zip Code"),
-                },
+                "recipient_duns": None,
+                "recipient_location": "{}",
                 "total_obligation": record.get("Award Amount"),
                 "award_description": record.get("Description"),
                 "period_of_performance_start": start_date,
-                "period_of_performance_end": record.get("End Date"),
-                "fiscal_year": fiscal_year or datetime.now().year,
-                "treasury_account_symbol": record.get("Treasury Account Symbol"),
+                "period_of_performance_end": end_date,
+                "fiscal_year": fiscal_year,
+                "treasury_account_symbol": None,
                 "naics_code": record.get("NAICS Code"),
                 "naics_description": record.get("NAICS Description"),
                 "psc_code": record.get("PSC Code"),
                 "psc_description": record.get("PSC Description"),
-                "place_of_performance": {
-                    "city": record.get("Place of Performance City"),
-                    "state": record.get("Place of Performance State"),
-                    "country": record.get("Place of Performance Country"),
-                    "zip": record.get("Place of Performance Zip Code"),
-                },
-                "raw_data": record,
+                "place_of_performance": "{}",
+                "raw_data": json.dumps(record),
             }
         except Exception as e:
             logger.error(f"Transform error for {record.get('Award ID')}: {e}")
@@ -201,11 +216,11 @@ class USASpendingPipeline(BasePipeline[dict, str]):
             VALUES (
                 :award_id, :award_type, :awarding_agency_name, :awarding_agency_code,
                 :funding_agency_name, :funding_agency_code, :recipient_name,
-                :recipient_uei, :recipient_duns, :recipient_location,
+                :recipient_uei, :recipient_duns, CAST(:recipient_location AS JSONB),
                 :total_obligation, :award_description,
                 :period_of_performance_start, :period_of_performance_end,
                 :fiscal_year, :treasury_account_symbol, :naics_code, :naics_description,
-                :psc_code, :psc_description, :place_of_performance, :raw_data,
+                :psc_code, :psc_description, CAST(:place_of_performance AS JSONB), CAST(:raw_data AS JSONB),
                 NOW()
             )
             ON CONFLICT (award_id, fiscal_year) DO UPDATE SET
