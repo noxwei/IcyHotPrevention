@@ -97,6 +97,10 @@ class OpenSkyPipeline(BasePipeline[dict, str]):
             parsed = []
             for state in states:
                 if len(state) >= 17:
+                    timestamp = state[4] or state[3]
+                    if timestamp is None:
+                        logger.warning(f"Skipping aircraft {state[0]}: no timestamp")
+                        continue
                     parsed.append({
                         "icao24": state[0],
                         "callsign": (state[1] or "").strip(),
@@ -109,7 +113,7 @@ class OpenSkyPipeline(BasePipeline[dict, str]):
                         "heading": state[10],
                         "vertical_rate": state[11],
                         "observed_at": datetime.fromtimestamp(
-                            state[4] or state[3], tz=timezone.utc
+                            timestamp, tz=timezone.utc
                         ),
                     })
             return parsed

@@ -106,11 +106,17 @@ class MemoryStore:
         query_embedding = await embedding_service.embed_query(query)
         embedding_str = f"[{','.join(str(x) for x in query_embedding)}]"
 
-        # Build query with optional type filter
+        # Build query with optional type filter (parameterized to prevent SQL injection)
         type_condition = ""
+        params = {
+            "agent_type": agent_type,
+            "query_embedding": embedding_str,
+            "limit": limit,
+        }
+
         if memory_types:
-            type_list = ", ".join(f"'{t}'" for t in memory_types)
-            type_condition = f"AND memory_type IN ({type_list})"
+            type_condition = "AND memory_type = ANY(:memory_types)"
+            params["memory_types"] = memory_types
 
         sql = text(f"""
             SELECT
@@ -130,14 +136,7 @@ class MemoryStore:
             LIMIT :limit
         """)
 
-        result = await self.session.execute(
-            sql,
-            {
-                "agent_type": agent_type,
-                "query_embedding": embedding_str,
-                "limit": limit,
-            },
-        )
+        result = await self.session.execute(sql, params)
 
         memories = []
         for row in result.fetchall():

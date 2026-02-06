@@ -146,6 +146,57 @@ class TestRateLimitedDecorator:
         assert call_count == 3
 
 
+class TestTokenBucketConcurrency:
+    """Tests for concurrent token acquisition."""
+
+    @pytest.mark.asyncio
+    async def test_concurrent_acquire_never_goes_negative(self):
+        """Two concurrent acquires on burst=5 bucket: one waits, tokens never negative."""
+        config = RateLimitConfig(name="test_conc", rate=10, period=1.0, burst=5)
+        bucket = TokenBucket(config)
+
+        await asyncio.gather(bucket.acquire(5), bucket.acquire(5))
+
+        # After both complete, tokens should be non-negative
+        assert bucket.tokens >= 0
+
+    @pytest.mark.asyncio
+    async def test_many_concurrent_acquires_tokens_stay_non_negative(self):
+        """5 concurrent acquire(3) on burst=10: tokens never go negative."""
+        config = RateLimitConfig(name="test_many", rate=10, period=1.0, burst=10)
+        bucket = TokenBucket(config)
+
+        snapshots = []
+        original_refill = bucket._refill
+
+        def tracking_refill():
+            original_refill()
+            snapshots.append(bucket.tokens)
+
+        bucket._refill = tracking_refill
+
+        await asyncio.gather(*[bucket.acquire(3) for _ in range(5)])
+
+        # All observed token counts should be non-negative
+        assert all(t >= -0.01 for t in snapshots)  # small float tolerance
+        assert bucket.tokens >= 0
+
+    @pytest.mark.asyncio
+    async def test_total_waited_is_accurate(self):
+        """total_waited return value should reflect actual wait time."""
+        config = RateLimitConfig(name="test_wait", rate=10, period=1.0, burst=5)
+        bucket = TokenBucket(config)
+
+        # Empty the bucket
+        await bucket.acquire(5)
+
+        # Now acquire 5 more — should wait ~0.5s at 10 tokens/sec
+        waited = await bucket.acquire(5)
+
+        assert waited >= 0.4  # Allow timing variance
+        assert waited < 2.0  # Sanity upper bound
+
+
 class TestGlobalRegistry:
     """Tests for global registry."""
 

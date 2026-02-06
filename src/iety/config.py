@@ -123,7 +123,7 @@ class BudgetSettings(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="BUDGET_")
 
-    monthly_limit: float = Field(default=50.0, description="Monthly budget limit in USD")
+    monthly_limit: float = Field(default=50.0, gt=0, description="Monthly budget limit in USD")
     warning_threshold: float = Field(default=0.90, description="Warning at 90% of budget")
     halt_threshold: float = Field(default=0.95, description="Halt at 95% of budget")
 

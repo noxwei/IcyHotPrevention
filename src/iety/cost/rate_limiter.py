@@ -55,27 +55,28 @@ class TokenBucket:
         Returns:
             Time waited in seconds
         """
-        async with self._lock:
-            self._refill()
+        total_waited = 0.0
 
-            if self.tokens >= tokens:
-                self.tokens -= tokens
-                return 0.0
+        while True:
+            async with self._lock:
+                self._refill()
 
-            # Calculate wait time
-            deficit = tokens - self.tokens
-            wait_time = deficit * (self.config.period / self.config.rate)
+                if self.tokens >= tokens:
+                    self.tokens -= tokens
+                    return total_waited
 
+                # Calculate wait time for deficit
+                deficit = tokens - self.tokens
+                wait_time = deficit * (self.config.period / self.config.rate)
+
+            # Sleep outside lock so other coroutines can proceed,
+            # then re-acquire lock and re-check tokens
             logger.debug(
                 f"Rate limit [{self.config.name}]: waiting {wait_time:.2f}s "
                 f"for {tokens} tokens"
             )
-
             await asyncio.sleep(wait_time)
-
-            self._refill()
-            self.tokens -= tokens
-            return wait_time
+            total_waited += wait_time
 
     async def try_acquire(self, tokens: float = 1.0) -> bool:
         """Try to acquire tokens without waiting.

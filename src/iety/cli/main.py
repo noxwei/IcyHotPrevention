@@ -485,7 +485,6 @@ async def _flights(poll: bool, watch: bool, list_aircraft: bool, source: str):
 
             if watch:
                 # Continuous watching
-                import time
                 console.print("[cyan]Watching ICE charter flights (Ctrl+C to stop)...[/cyan]\n")
 
                 while True:
@@ -500,7 +499,7 @@ async def _flights(poll: bool, watch: bool, list_aircraft: bool, source: str):
                     else:
                         console.print(f"[dim]{datetime.now().strftime('%H:%M:%S')}[/dim] - No aircraft airborne")
 
-                    time.sleep(60)  # Poll every 60 seconds
+                    await asyncio.sleep(60)  # Poll every 60 seconds
 
         finally:
             await pipeline.close()
